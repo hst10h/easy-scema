@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { ArrowDownToLine, Check, ChevronRight, CircleAlert, FileSpreadsheet, FileText, LayoutDashboard, Plus, Settings, Sparkles, UploadCloud, X } from "lucide-react";
+import { ArrowDownToLine, Check, ChevronRight, CircleAlert, FileSpreadsheet, FileText, LayoutDashboard, Plus, Settings, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,11 @@ type Field = { key: string; label: string };
 type Source = { file: string; sheet?: string; row?: number; original?: string };
 type FieldSource = { text?: string; page?: number | null; confidence?: number };
 type Row = Record<string, string> & { _source: Source; _fieldSources?: Record<string, FieldSource> };
+type SavedTemplate = { id: string; name: string; fields: Field[]; createdAt: string; updatedAt: string };
+type SavedJob = { id: string; templateName: string; fields: Field[]; rows: Row[]; fileNames: string[]; createdAt: string; updatedAt: string };
+
+const TEMPLATE_STORAGE_KEY = "structflow_templates_v1";
+const JOB_STORAGE_KEY = "structflow_jobs_v1";
 
 const defaultFields: Field[] = [
   { key: "supplier", label: "Supplier" }, { key: "sku", label: "SKU" },
@@ -35,6 +40,17 @@ function normalizeKey(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
 
+function readStoredList<T>(key: string): T[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? "[]");
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("extract");
   const [step, setStep] = useState<Step>("template");
@@ -47,18 +63,56 @@ export default function Home() {
   const [geminiKey, setGeminiKey] = useState("");
   const [keySaved, setKeySaved] = useState(false);
   const [testingKey, setTestingKey] = useState(false);
+  const [savedTemplates, setSavedTemplates] = useState<SavedTemplate[]>([]);
+  const [savedJobs, setSavedJobs] = useState<SavedJob[]>([]);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const templateInput = useRef<HTMLInputElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
   const warnings = useMemo(() => rows.reduce((sum, row) => sum + fields.filter((field) => !row[field.key]?.trim()).length, 0), [rows, fields]);
 
   useEffect(() => {
     const saved = sessionStorage.getItem("structflow_gemini_key") ?? "";
+    const templates = readStoredList<SavedTemplate>(TEMPLATE_STORAGE_KEY);
+    const jobs = readStoredList<SavedJob>(JOB_STORAGE_KEY);
     const timer = window.setTimeout(() => {
       setGeminiKey(saved);
       setKeySaved(Boolean(saved));
+      setSavedTemplates(templates);
+      setSavedJobs(jobs);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
+
+  function persistTemplates(next: SavedTemplate[]) {
+    setSavedTemplates(next);
+    localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function persistJobs(next: SavedJob[]) {
+    setSavedJobs(next);
+    localStorage.setItem(JOB_STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function saveCurrentTemplate(nextName = templateName, nextFields = fields) {
+    const name = nextName.trim() || "Untitled template";
+    const now = new Date().toISOString();
+    const existing = savedTemplates.find((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    const saved: SavedTemplate = existing
+      ? { ...existing, name, fields: nextFields, updatedAt: now }
+      : { id: crypto.randomUUID(), name, fields: nextFields, createdAt: now, updatedAt: now };
+    persistTemplates([saved, ...savedTemplates.filter((item) => item.id !== saved.id)]);
+    return saved;
+  }
+
+  function saveJob(nextRows: Row[], fileNames: string[], jobId = activeJobId) {
+    const now = new Date().toISOString();
+    const existing = jobId ? savedJobs.find((item) => item.id === jobId) : undefined;
+    const saved: SavedJob = existing
+      ? { ...existing, templateName, fields, rows: nextRows, fileNames, updatedAt: now }
+      : { id: crypto.randomUUID(), templateName, fields, rows: nextRows, fileNames, createdAt: now, updatedAt: now };
+    persistJobs([saved, ...savedJobs.filter((item) => item.id !== saved.id)]);
+    setActiveJobId(saved.id);
+  }
 
   async function parseWorkbook(file: File) {
     const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
@@ -73,8 +127,11 @@ export default function Home() {
       const { values } = await parseWorkbook(file);
       const header = (values[0] ?? []).map(String).filter(Boolean);
       if (!header.length) throw new Error();
-      setFields(header.map((label) => ({ label, key: normalizeKey(label) || `field_${crypto.randomUUID()}` })));
-      setTemplateName(file.name.replace(/\.[^.]+$/, ""));
+      const nextFields = header.map((label) => ({ label, key: normalizeKey(label) || `field_${crypto.randomUUID()}` }));
+      const nextName = file.name.replace(/\.[^.]+$/, "");
+      setFields(nextFields);
+      setTemplateName(nextName);
+      saveCurrentTemplate(nextName, nextFields);
       toast.success(`Đã đọc ${header.length} cột từ template`);
     } catch { toast.error("Không đọc được template. Hãy kiểm tra dòng header đầu tiên."); }
   }
@@ -126,13 +183,27 @@ export default function Home() {
     }
     await new Promise((resolve) => setTimeout(resolve, 600));
     setRows(output);
+    saveJob(output, files.map((file) => file.name), null);
     setProcessing(false);
     setStep("review");
     toast.success(`Đã chuẩn hóa ${output.length} dòng dữ liệu`);
   }
 
-  function useDemo() { setFiles([]); setRows(demoRows.map((row) => ({ ...row }))); setStep("review"); toast.success("Đã mở bộ dữ liệu mẫu"); }
-  function updateCell(rowIndex: number, key: string, value: string) { setRows((current) => current.map((row, index) => index === rowIndex ? { ...row, [key]: value } : row)); }
+  function useDemo() {
+    const nextRows = demoRows.map((row) => ({ ...row }));
+    setFiles([]);
+    setRows(nextRows);
+    saveCurrentTemplate();
+    saveJob(nextRows, ["Demo dataset"], null);
+    setStep("review");
+    toast.success("Đã mở và lưu bộ dữ liệu mẫu");
+  }
+
+  function updateCell(rowIndex: number, key: string, value: string) {
+    const nextRows = rows.map((row, index) => index === rowIndex ? { ...row, [key]: value } : row);
+    setRows(nextRows);
+    if (activeJobId) saveJob(nextRows, savedJobs.find((job) => job.id === activeJobId)?.fileNames ?? [], activeJobId);
+  }
   function exportExcel() {
     const data = rows.map((row) => Object.fromEntries(fields.map((field) => [field.label, row[field.key] ?? ""])));
     const workbook = XLSX.utils.book_new();
@@ -183,7 +254,53 @@ export default function Home() {
   function openNewExtraction() {
     setView("extract");
     setStep("template");
+    setFiles([]);
+    setRows([]);
+    setActiveJobId(null);
     setSelected(null);
+  }
+
+  function openTemplate(template: SavedTemplate) {
+    setTemplateName(template.name);
+    setFields(template.fields);
+    setFiles([]);
+    setRows([]);
+    setActiveJobId(null);
+    setSelected(null);
+    setView("extract");
+    setStep("upload");
+  }
+
+  function openJob(job: SavedJob) {
+    setTemplateName(job.templateName);
+    setFields(job.fields);
+    setRows(job.rows);
+    setFiles([]);
+    setActiveJobId(job.id);
+    setSelected(null);
+    setView("extract");
+    setStep("review");
+  }
+
+  function deleteTemplate(id: string) {
+    persistTemplates(savedTemplates.filter((template) => template.id !== id));
+    toast.success("Đã xóa template");
+  }
+
+  function deleteJob(id: string) {
+    persistJobs(savedJobs.filter((job) => job.id !== id));
+    if (activeJobId === id) setActiveJobId(null);
+    toast.success("Đã xóa job");
+  }
+
+  function clearWorkspaceData() {
+    persistTemplates([]);
+    persistJobs([]);
+    setRows([]);
+    setFiles([]);
+    setActiveJobId(null);
+    setSelected(null);
+    toast.success("Đã xóa toàn bộ job và template đã lưu");
   }
 
   return <div className="min-h-screen bg-[#f6f7f5] text-[#19201c]">
@@ -205,7 +322,7 @@ export default function Home() {
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#3d725c]">Step 01</p><h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] md:text-[40px]">Dữ liệu đầu ra trông như thế nào?</h1><p className="mt-3 max-w-2xl text-[15px] leading-6 text-[#6f7872]">Tải bảng mẫu bạn đang dùng. StructFlow sẽ lấy tên cột và thứ tự cột làm schema — bạn không cần viết prompt.</p>
           <div className="mt-8 grid gap-5 md:grid-cols-[1.25fr_.75fr]">
             <button onClick={() => templateInput.current?.click()} className="group min-h-64 rounded-2xl border border-[#b9cfc4] bg-[#eef5f1] p-8 text-left transition hover:border-[#4c806a] hover:bg-[#e9f2ed]"><input ref={templateInput} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={(event) => handleTemplate(event.target.files?.[0])} /><div className="grid size-11 place-items-center rounded-xl bg-[#164c3a] text-white"><UploadCloud className="size-5" /></div><h2 className="mt-7 text-xl font-semibold">Upload Excel / CSV template</h2><p className="mt-2 max-w-md text-sm leading-6 text-[#64716a]">Dòng đầu tiên sẽ trở thành cấu trúc output. Hỗ trợ XLSX, XLS và CSV.</p><span className="mt-6 inline-flex items-center gap-1 text-sm font-semibold text-[#2e6a51]">Chọn file <ChevronRight className="size-4 transition group-hover:translate-x-1" /></span></button>
-            <div className="rounded-2xl border border-[#dfe3de] bg-white p-6"><div className="flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-[.12em] text-[#7b837e]">Schema preview</span><Badge className="bg-[#edf4ef] text-[#32614e] hover:bg-[#edf4ef]">{fields.length} fields</Badge></div><Input value={templateName} onChange={(event) => setTemplateName(event.target.value)} className="mt-5 border-0 border-b border-[#dfe3de] bg-transparent px-0 text-lg font-semibold shadow-none focus-visible:ring-0" /><div className="mt-4 max-h-36 space-y-1.5 overflow-auto pr-1">{fields.map((field, index) => <div key={field.key} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-sm"><span className="w-4 text-[11px] text-[#a0a7a2]">{String(index + 1).padStart(2, "0")}</span><span>{field.label}</span></div>)}</div><Button onClick={() => setStep("upload")} className="mt-5 w-full bg-[#164c3a] hover:bg-[#113e2f]">Use this schema <ChevronRight className="size-4" /></Button></div>
+            <div className="rounded-2xl border border-[#dfe3de] bg-white p-6"><div className="flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-[.12em] text-[#7b837e]">Schema preview</span><Badge className="bg-[#edf4ef] text-[#32614e] hover:bg-[#edf4ef]">{fields.length} fields</Badge></div><Input value={templateName} onChange={(event) => setTemplateName(event.target.value)} className="mt-5 border-0 border-b border-[#dfe3de] bg-transparent px-0 text-lg font-semibold shadow-none focus-visible:ring-0" /><div className="mt-4 max-h-36 space-y-1.5 overflow-auto pr-1">{fields.map((field, index) => <div key={field.key} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-sm"><span className="w-4 text-[11px] text-[#a0a7a2]">{String(index + 1).padStart(2, "0")}</span><span>{field.label}</span></div>)}</div><Button onClick={() => { saveCurrentTemplate(); setStep("upload"); }} className="mt-5 w-full bg-[#164c3a] hover:bg-[#113e2f]">Save & use schema <ChevronRight className="size-4" /></Button></div>
           </div><button onClick={useDemo} className="mx-auto mt-6 block text-sm font-medium text-[#3c6e59] underline underline-offset-4">Hoặc mở dữ liệu mẫu để xem review</button>
         </section>}
 
@@ -226,18 +343,18 @@ export default function Home() {
         </>}
 
         {view === "jobs" && <section>
-          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#3d725c]">Workspace</p><h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] md:text-[40px]">Extraction jobs</h1><p className="mt-2 text-sm text-[#727b75]">Các job trong phiên làm việc hiện tại.</p></div><Button onClick={openNewExtraction} className="bg-[#164c3a] hover:bg-[#113e2f]"><Plus className="size-4" /> New extraction</Button></div>
-          <div className="mt-8 overflow-hidden rounded-xl border border-[#d9ded9] bg-white"><Table><TableHeader><TableRow className="bg-[#f7f8f6] hover:bg-[#f7f8f6]"><TableHead>Job</TableHead><TableHead>Files</TableHead><TableHead>Rows</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader><TableBody>{rows.length ? <TableRow><TableCell className="font-medium">{templateName}</TableCell><TableCell>{files.length || "Demo"}</TableCell><TableCell>{rows.length}</TableCell><TableCell><Badge className={warnings ? "bg-[#fff3dd] text-[#95621f] hover:bg-[#fff3dd]" : "bg-[#eaf4ee] text-[#32614e] hover:bg-[#eaf4ee]"}>{warnings ? "Needs review" : "Completed"}</Badge></TableCell><TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => { setView("extract"); setStep("review"); }}>Open</Button></TableCell></TableRow> : <TableRow><TableCell colSpan={5} className="h-48 text-center"><div className="mx-auto grid size-10 place-items-center rounded-full bg-[#edf3ef] text-[#3f725b]"><FileText className="size-4" /></div><p className="mt-3 text-sm font-medium">Chưa có extraction job</p><button onClick={openNewExtraction} className="mt-2 text-xs font-semibold text-[#367057] underline underline-offset-4">Tạo job đầu tiên</button></TableCell></TableRow>}</TableBody></Table></div>
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#3d725c]">Workspace</p><h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] md:text-[40px]">Extraction jobs</h1><p className="mt-2 text-sm text-[#727b75]">Được lưu trên trình duyệt này và có thể mở lại sau khi reload.</p></div><Button onClick={openNewExtraction} className="bg-[#164c3a] hover:bg-[#113e2f]"><Plus className="size-4" /> New extraction</Button></div>
+          <div className="mt-8 overflow-hidden rounded-xl border border-[#d9ded9] bg-white"><Table><TableHeader><TableRow className="bg-[#f7f8f6] hover:bg-[#f7f8f6]"><TableHead>Job</TableHead><TableHead>Files</TableHead><TableHead>Rows</TableHead><TableHead>Updated</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader><TableBody>{savedJobs.length ? savedJobs.map((job) => { const jobWarnings = job.rows.reduce((sum, row) => sum + job.fields.filter((field) => !row[field.key]?.trim()).length, 0); return <TableRow key={job.id}><TableCell className="font-medium">{job.templateName}</TableCell><TableCell>{job.fileNames.length}</TableCell><TableCell>{job.rows.length}</TableCell><TableCell className="whitespace-nowrap text-xs text-[#737c76]">{formatDate(job.updatedAt)}</TableCell><TableCell><Badge className={jobWarnings ? "bg-[#fff3dd] text-[#95621f] hover:bg-[#fff3dd]" : "bg-[#eaf4ee] text-[#32614e] hover:bg-[#eaf4ee]"}>{jobWarnings ? `${jobWarnings} to review` : "Completed"}</Badge></TableCell><TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" onClick={() => openJob(job)}>Open</Button><Button variant="ghost" size="icon" aria-label={`Delete ${job.templateName}`} onClick={() => deleteJob(job.id)} className="text-[#a34c43] hover:text-[#8f3e36]"><Trash2 className="size-4" /></Button></div></TableCell></TableRow>; }) : <TableRow><TableCell colSpan={6} className="h-48 text-center"><div className="mx-auto grid size-10 place-items-center rounded-full bg-[#edf3ef] text-[#3f725b]"><FileText className="size-4" /></div><p className="mt-3 text-sm font-medium">Chưa có extraction job</p><button onClick={openNewExtraction} className="mt-2 text-xs font-semibold text-[#367057] underline underline-offset-4">Tạo job đầu tiên</button></TableCell></TableRow>}</TableBody></Table></div>
         </section>}
 
         {view === "templates" && <section>
           <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#3d725c]">Reusable schemas</p><h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] md:text-[40px]">Templates</h1><p className="mt-2 text-sm text-[#727b75]">Chọn lại schema mà không cần cấu hình từ đầu.</p></div><Button onClick={openNewExtraction} className="bg-[#164c3a] hover:bg-[#113e2f]"><Plus className="size-4" /> New template</Button></div>
-          <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3"><button onClick={() => { setView("extract"); setStep("upload"); }} className="group rounded-xl border border-[#d9ded9] bg-white p-5 text-left transition hover:border-[#8eb09f] hover:shadow-sm"><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-lg bg-[#eaf2ed] text-[#32614e]"><FileSpreadsheet className="size-5" /></div><Badge variant="outline">{fields.length} fields</Badge></div><h2 className="mt-5 font-semibold">{templateName}</h2><p className="mt-2 line-clamp-2 text-xs leading-5 text-[#7a837d]">{fields.map((field) => field.label).join(" · ")}</p><span className="mt-5 inline-flex items-center gap-1 text-xs font-semibold text-[#3a6e57]">Use template <ChevronRight className="size-3.5 transition group-hover:translate-x-1" /></span></button></div>
+          {savedTemplates.length ? <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{savedTemplates.map((template) => <div key={template.id} className="group rounded-xl border border-[#d9ded9] bg-white p-5 transition hover:border-[#8eb09f] hover:shadow-sm"><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-lg bg-[#eaf2ed] text-[#32614e]"><FileSpreadsheet className="size-5" /></div><div className="flex items-center gap-1"><Badge variant="outline">{template.fields.length} fields</Badge><Button variant="ghost" size="icon" aria-label={`Delete ${template.name}`} onClick={() => deleteTemplate(template.id)} className="size-8 text-[#a34c43] hover:text-[#8f3e36]"><Trash2 className="size-4" /></Button></div></div><h2 className="mt-5 font-semibold">{template.name}</h2><p className="mt-2 line-clamp-2 text-xs leading-5 text-[#7a837d]">{template.fields.map((field) => field.label).join(" · ")}</p><button onClick={() => openTemplate(template)} className="mt-5 inline-flex items-center gap-1 text-xs font-semibold text-[#3a6e57]">Use template <ChevronRight className="size-3.5 transition group-hover:translate-x-1" /></button></div>)}</div> : <div className="mt-8 rounded-xl border border-[#d9ded9] bg-white py-16 text-center"><div className="mx-auto grid size-10 place-items-center rounded-full bg-[#edf3ef] text-[#3f725b]"><FileSpreadsheet className="size-4" /></div><p className="mt-3 text-sm font-medium">Chưa có template đã lưu</p><button onClick={openNewExtraction} className="mt-2 text-xs font-semibold text-[#367057] underline underline-offset-4">Tạo template đầu tiên</button></div>}
         </section>}
 
         {view === "settings" && <section className="mx-auto max-w-3xl">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#3d725c]">Configuration</p><h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] md:text-[40px]">Settings</h1><p className="mt-2 text-sm text-[#727b75]">Cấu hình xử lý tài liệu và quyền riêng tư.</p>
-          <div className="mt-8 space-y-4"><div className="rounded-xl border border-[#d9ded9] bg-white p-5"><div className="flex items-start justify-between gap-5"><div><h2 className="font-semibold">Gemini extraction</h2><p className="mt-2 text-sm leading-6 text-[#737c76]">Nhập key từ Google AI Studio để xử lý PDF và ảnh bằng Gemini 3.7 Flash.</p></div><Badge className={keySaved ? "bg-[#eaf4ee] text-[#32614e] hover:bg-[#eaf4ee]" : "bg-[#fff3dd] text-[#95621f] hover:bg-[#fff3dd]"}>{keySaved ? "Key saved" : "Key required"}</Badge></div><label className="mt-5 block text-xs font-semibold text-[#59635d]" htmlFor="gemini-key">Gemini API key</label><Input id="gemini-key" type="password" autoComplete="off" value={geminiKey} onChange={(event) => { setGeminiKey(event.target.value); setKeySaved(false); }} placeholder="AIza…" className="mt-2 font-mono" /><p className="mt-2 text-xs leading-5 text-[#858d88]">Key chỉ được giữ trong tab hiện tại bằng sessionStorage và gửi qua HTTPS khi extraction. Đóng tab sẽ xóa key.</p><div className="mt-4 flex flex-wrap gap-2"><Button onClick={saveGeminiKey} className="bg-[#164c3a] hover:bg-[#113e2f]">Save for this session</Button><Button variant="outline" onClick={testGeminiKey} disabled={testingKey}>{testingKey ? "Testing…" : "Test connection"}</Button>{keySaved && <Button variant="ghost" onClick={removeGeminiKey} className="text-[#a34c43] hover:text-[#8f3e36]">Remove key</Button>}</div></div><div className="rounded-xl border border-[#d9ded9] bg-white p-5"><h2 className="font-semibold">No-hallucination rule</h2><p className="mt-2 text-sm leading-6 text-[#737c76]">Trường không có bằng chứng trong tài liệu luôn được trả về rỗng và đưa vào hàng đợi review.</p></div><div className="rounded-xl border border-[#d9ded9] bg-white p-5"><h2 className="font-semibold">Session data</h2><p className="mt-2 text-sm leading-6 text-[#737c76]">Job và template hiện chỉ tồn tại trong phiên trình duyệt này.</p><Button variant="outline" className="mt-4" onClick={() => { setRows([]); setFiles([]); toast.success("Đã xóa dữ liệu trong phiên"); }}>Clear session data</Button></div></div>
+          <div className="mt-8 space-y-4"><div className="rounded-xl border border-[#d9ded9] bg-white p-5"><div className="flex items-start justify-between gap-5"><div><h2 className="font-semibold">Gemini extraction</h2><p className="mt-2 text-sm leading-6 text-[#737c76]">Nhập key từ Google AI Studio để xử lý PDF và ảnh bằng Gemini 3.7 Flash.</p></div><Badge className={keySaved ? "bg-[#eaf4ee] text-[#32614e] hover:bg-[#eaf4ee]" : "bg-[#fff3dd] text-[#95621f] hover:bg-[#fff3dd]"}>{keySaved ? "Key saved" : "Key required"}</Badge></div><label className="mt-5 block text-xs font-semibold text-[#59635d]" htmlFor="gemini-key">Gemini API key</label><Input id="gemini-key" type="password" autoComplete="off" value={geminiKey} onChange={(event) => { setGeminiKey(event.target.value); setKeySaved(false); }} placeholder="AIza…" className="mt-2 font-mono" /><p className="mt-2 text-xs leading-5 text-[#858d88]">Key chỉ được giữ trong tab hiện tại bằng sessionStorage và gửi qua HTTPS khi extraction. Đóng tab sẽ xóa key.</p><div className="mt-4 flex flex-wrap gap-2"><Button onClick={saveGeminiKey} className="bg-[#164c3a] hover:bg-[#113e2f]">Save for this session</Button><Button variant="outline" onClick={testGeminiKey} disabled={testingKey}>{testingKey ? "Testing…" : "Test connection"}</Button>{keySaved && <Button variant="ghost" onClick={removeGeminiKey} className="text-[#a34c43] hover:text-[#8f3e36]">Remove key</Button>}</div></div><div className="rounded-xl border border-[#d9ded9] bg-white p-5"><h2 className="font-semibold">No-hallucination rule</h2><p className="mt-2 text-sm leading-6 text-[#737c76]">Trường không có bằng chứng trong tài liệu luôn được trả về rỗng và đưa vào hàng đợi review.</p></div><div className="rounded-xl border border-[#d9ded9] bg-white p-5"><h2 className="font-semibold">Local workspace data</h2><p className="mt-2 text-sm leading-6 text-[#737c76]">Job, kết quả review và template được lưu bằng localStorage trên trình duyệt này. File nguồn gốc không được lưu lại.</p><p className="mt-2 text-xs text-[#858d88]">{savedJobs.length} jobs · {savedTemplates.length} templates</p><Button variant="outline" className="mt-4 text-[#a34c43]" onClick={clearWorkspaceData}>Clear saved workspace</Button></div></div>
         </section>}
       </div>
     </main>

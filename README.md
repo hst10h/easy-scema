@@ -10,6 +10,8 @@ Biến PDF, ảnh, CSV và Excel không đồng nhất thành bảng dữ liệu
 - Không tự đoán field bị thiếu.
 - Review và sửa dữ liệu trực tiếp.
 - Hiển thị confidence, trang và đoạn text nguồn.
+- Lưu template, extraction job và nội dung review trên trình duyệt.
+- Mở lại hoặc xóa job/template sau khi reload trang.
 - Export kết quả thành `.xlsx`.
 
 ## Yêu cầu
@@ -45,6 +47,8 @@ GEMINI_API_KEY=your_key_here
 
 Không commit `.env.local` hoặc API key thật lên Git.
 
+Template và kết quả extraction được lưu bằng `localStorage` trên trình duyệt đang dùng. StructFlow chỉ lưu tên file và dữ liệu đã trích xuất; file nguồn không được lưu trong trình duyệt. Có thể xóa toàn bộ dữ liệu này trong `Settings`.
+
 ## Scripts
 
 ```bash
@@ -65,4 +69,4 @@ components/ui/                  UI primitives
 
 ## Trạng thái
 
-Đây là technical prototype. Job và template hiện chỉ lưu trong phiên trình duyệt; chưa có database, object storage, queue, authentication hoặc billing.
+Đây là technical prototype. Job và template đã có persistence cục bộ trên trình duyệt; chưa có database phía server, object storage, queue, authentication hoặc billing.
