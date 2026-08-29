@@ -1,0 +1,25 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+:root {
+  --background: #f6f7f5; --foreground: #19201c; --card: #ffffff; --card-foreground: #19201c;
+  --popover: #ffffff; --popover-foreground: #19201c; --primary: #164c3a; --primary-foreground: #ffffff;
+  --secondary: #edf2ee; --secondary-foreground: #254b3b; --muted: #f0f2ef; --muted-foreground: #6f7872;
+  --accent: #e9f1ec; --accent-foreground: #164c3a; --destructive: #b34237; --border: #dfe3de;
+  --input: #dfe3de; --ring: #75a08c; --radius: .7rem;
+}
+@theme inline {
+  --color-background: var(--background); --color-foreground: var(--foreground); --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground); --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground); --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground); --color-destructive: var(--destructive);
+  --color-border: var(--border); --color-input: var(--input); --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 5px);
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { border-color: var(--border); }
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: var(--font-sans); }
+button { cursor: pointer; } button:disabled { cursor: not-allowed; }
+::selection { background: #cfe2d8; color: #143d30; }
