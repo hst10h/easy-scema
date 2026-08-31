@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
+import { env } from "@/lib/server/env";
 
 export async function POST(request: Request) {
   const apiKey = request.headers.get("x-gemini-api-key")?.trim();
   if (!apiKey) return NextResponse.json({ error: "Chưa nhập Gemini API key." }, { status: 400 });
   try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash", {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${env.geminiModel}`, {
       headers: { "x-goog-api-key": apiKey },
     });
     const payload = await response.json() as { error?: { message?: string }; name?: string };
